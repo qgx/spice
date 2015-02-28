@@ -83,7 +83,15 @@
 #include "spice_timer_queue.h"
 #include "main_dispatcher.h"
 #include "red_time.h"
+#include <spice/macros.h>
 
+#ifdef WORDS_BIGENDIAN
+#define UINT16_FROM_LE(x) SPICE_BYTESWAP16(x)
+#define UINT32_FROM_LE(x) SPICE_BYTESWAP32(x)
+#else
+#define UINT16_FROM_LE(x) (x)
+#define UINT32_FROM_LE(x) (x)
+#endif
 //#define COMPRESS_STAT
 //#define DUMP_BITMAP
 //#define PIPE_DEBUG
@@ -6743,7 +6751,40 @@ typedef enum {
     FILL_BITS_TYPE_COMPRESS_LOSSY,
     FILL_BITS_TYPE_BITMAP,
 } FillBitsType;
+static INLINE uint16_t rgb_32_to_16_555(uint32_t color)
+{
+    return
+        (((color) >> 3) & 0x001f) |
+        (((color) >> 6) & 0x03e0) |
+        (((color) >> 9) & 0x7c00);
+}
+static void sbitmap_32_to_16(SpiceBitmap *bitmap)
+{
+	if (bitmap->format != SPICE_BITMAP_FMT_32BIT)
+	{
+		return;
+	}
+	bitmap->format = SPICE_BITMAP_FMT_16BIT;
+	bitmap->stride /= 2;
+	int i,j;
+	for (i = 0; i < bitmap->data->num_chunks; i++)
+	{
+		SpiceChunk *chunk = &bitmap->data->chunk[i];
+		//int num_lines = chunk->len / bitmap->stride;
+		uint32_t *src = (uint32_t*)chunk->data;
+		uint16_t *dst = (uint16_t*)malloc(chunk->len/2);
+		int slen = chunk->len;
+		chunk->len = slen/2;
 
+		for (j = 0; j < slen/4; j++)
+		{
+			//dump_line(f, chunk->data + (i * bitmap->stride), n_pixel_bits, bitmap->x, row_size);
+			dst[j] = rgb_32_to_16_555(UINT16_FROM_LE(src[j]));
+		}
+		free(chunk->data);
+		chunk->data = dst;
+	}
+}
 /* if the number of times fill_bits can be called per one qxl_drawable increases -
    MAX_LZ_DRAWABLE_INSTANCES must be increased as well */
 static FillBitsType fill_bits(DisplayChannelClient *dcc, SpiceMarshaller *m,
@@ -6825,6 +6866,7 @@ static FillBitsType fill_bits(DisplayChannelClient *dcc, SpiceMarshaller *m,
 #ifdef DUMP_BITMAP
         dump_bitmap(display_channel->common.worker, &simage->u.bitmap, drawable->group_id);
 #endif
+        sbitmap_32_to_16(&simage->u.bitmap);
         /* Images must be added to the cache only after they are compressed
            in order to prevent starvation in the client between pixmap_cache and
            global dictionary (in cases of multiple monitors) */
